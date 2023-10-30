@@ -185,32 +185,26 @@ func (i *inotify) epollclose() (err error) {
 func (i *inotify) loop(esch chan<- []*event) {
 	epes := make([]unix.EpollEvent, 1)
 	fd := atomic.LoadInt32(&i.fd)
-	for {
-		switch _, err := unix.EpollWait(i.epfd, epes, -1); err {
-		case nil:
-			switch epes[0].Fd {
-			case fd:
-				esch <- i.read()
-				epes[0].Fd = 0
-			case int32(i.pipefd[0]):
-				i.Lock()
-				defer i.Unlock()
-				if err = unix.Close(int(fd)); err != nil && err != unix.EINTR {
-					panic("notify: close(2) error " + err.Error())
-				}
-				atomic.StoreInt32(&i.fd, invalidDescriptor)
-				if err = i.epollclose(); err != nil && err != unix.EINTR {
-					panic("notify: epollclose error " + err.Error())
-				}
-				close(esch)
-				return
-			}
-		case unix.EINTR:
-			continue
-		default: // We should never reach this line.
-			panic("notify: epoll_wait(2) error " + err.Error())
+
+	// Without EpollWait, we can't determine readiness of the file descriptors
+	// So, checking the file descriptors directly may not make sense anymore.
+
+	if fd == int32(i.pipefd[0]) {
+		i.Lock()
+		defer i.Unlock()
+		if err := unix.Close(int(fd)); err != nil && err != unix.EINTR {
+			panic("notify: close(2) error " + err.Error())
 		}
+		atomic.StoreInt32(&i.fd, invalidDescriptor)
+		if err := i.epollclose(); err != nil && err != unix.EINTR {
+			panic("notify: epollclose error " + err.Error())
+		}
+		close(esch)
 	}
+
+	// Since the EpollWait mechanism is removed, we have to return early
+	// as we don't have the mechanism to determine the readiness.
+	return
 }
 
 // read reads events from an inotify file descriptor. It does not handle errors
